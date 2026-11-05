@@ -5,7 +5,7 @@
  *   GET  /api/candles                     → { counts: { [slug]: n }, mine: slug[] }
  *   POST /api/candles/:slug               → light a candle on an exhibit (once per visitor)
  *   GET  /api/search/screen?q=            → TMDB movies & series, trimmed for the picker
- *   GET  /api/picks?kind=screen           → recent visible favourites + the most picked
+ *   GET  /api/picks?kind=screen           → the sky: one star per title (most picked + newest), edge-cached 60 s
  *   POST /api/picks                       → { kind: 'screen', id: 'movie:157336', firstName?, turnstile }
  *   DELETE /api/admin/picks/:id           → hide a pick (Bearer ADMIN_TOKEN)
  *
@@ -15,8 +15,6 @@
 
 const TMDB = 'https://api.themoviedb.org/3';
 const TMDB_IMG = 'https://image.tmdb.org/t/p/w342';
-const RECENT_LIMIT = 150;
-const TOP_LIMIT = 20;
 
 type Json = Record<string, unknown> | unknown[];
 
@@ -58,7 +56,7 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
 
   if (m === 'GET' && path === '/api/search/screen') return searchScreen(url, env, ctx);
 
-  if (m === 'GET' && path === '/api/picks') return getPicks(url, env);
+  if (m === 'GET' && path === '/api/picks') return getPicks(url, env, ctx);
   if (m === 'POST' && path === '/api/picks') return addPick(req, env);
 
   const hide = path.match(/^\/api\/admin\/picks\/(\d+)$/);
@@ -147,55 +145,70 @@ async function searchScreen(url: URL, env: Env, ctx: ExecutionContext) {
 
 /* ---------------- favourites ---------------- */
 
-interface PickRow {
-  id: number;
+/**
+ * The sky: one star per title, however many people picked it. 10k picks of ~3k titles still come back as at most
+ * STAR_LIMIT stars: the most picked, plus the newest so a fresh pick always shows up. Shared by every visitor, so the
+ * answer is cached at the edge for a minute (the visitor who just added a star draws it locally at once).
+ */
+const STAR_LIMIT = 300;
+const NEWEST_LIMIT = 100;
+
+interface StarRow {
   ext_id: string;
   title: string;
   year: string | null;
   image: string | null;
   first_name: string | null;
   country: string;
-  created_at: number;
+  n: number;
+  last: number;
 }
 
-const toPick = (r: PickRow) => ({
-  id: r.id,
-  ref: r.ext_id,
-  title: r.title,
-  year: r.year,
-  poster: r.image ? TMDB_IMG + r.image : null,
-  firstName: r.first_name,
-  country: r.country,
-  createdAt: r.created_at,
-});
-
-async function getPicks(url: URL, env: Env) {
+async function getPicks(url: URL, env: Env, ctx: ExecutionContext) {
   const kind = url.searchParams.get('kind') ?? 'screen';
   if (kind !== 'screen') throw new HttpError(400, 'Unknown kind');
-  const [recent, top] = await env.DB.batch([
+  const cacheKey = new Request(`https://cache.internal/picks?kind=${kind}`);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return new Response(hit.body, hit);
+
+  const [stars, totals] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT id, ext_id, title, year, image, first_name, country, created_at FROM picks
-       WHERE kind = ? AND hidden = 0 ORDER BY created_at DESC LIMIT ?`,
-    ).bind(kind, RECENT_LIMIT),
-    env.DB.prepare(
-      `SELECT ext_id, MAX(title) AS title, MAX(year) AS year, MAX(image) AS image, COUNT(*) AS n FROM picks
-       WHERE kind = ? AND hidden = 0 GROUP BY ext_id ORDER BY n DESC, MAX(created_at) DESC LIMIT ?`,
-    ).bind(kind, TOP_LIMIT),
+      `WITH g AS (
+         SELECT ext_id, COUNT(*) AS n, MAX(created_at) AS last FROM picks WHERE kind = ?1 AND hidden = 0 GROUP BY ext_id
+       ), chosen AS (
+         SELECT ext_id FROM (SELECT ext_id FROM g ORDER BY n DESC, last DESC LIMIT ?2)
+         UNION
+         SELECT ext_id FROM (SELECT ext_id FROM g ORDER BY last DESC LIMIT ?3)
+       )
+       SELECT p.ext_id, p.title, p.year, p.image, p.first_name, p.country, g.n, g.last
+       FROM g JOIN chosen c ON c.ext_id = g.ext_id
+       JOIN picks p ON p.kind = ?1 AND p.hidden = 0 AND p.ext_id = g.ext_id AND p.created_at = g.last
+       GROUP BY p.ext_id
+       ORDER BY g.n DESC, g.last DESC`,
+    ).bind(kind, STAR_LIMIT, NEWEST_LIMIT),
+    env.DB.prepare('SELECT COUNT(*) AS picks, COUNT(DISTINCT ext_id) AS titles FROM picks WHERE kind = ? AND hidden = 0').bind(kind),
   ]);
-  return json(
+  const t = (totals.results[0] ?? { picks: 0, titles: 0 }) as { picks: number; titles: number };
+  const res = json(
     {
-      recent: (recent.results as unknown as PickRow[]).map(toPick),
-      top: (top.results as unknown as (PickRow & { n: number })[]).map((r) => ({
+      total: { picks: t.picks, titles: t.titles },
+      stars: (stars.results as unknown as StarRow[]).map((r) => ({
         ref: r.ext_id,
         title: r.title,
         year: r.year,
         poster: r.image ? TMDB_IMG + r.image : null,
         count: r.n,
+        // the latest person to pick it
+        firstName: r.first_name,
+        country: r.country,
       })),
     },
     200,
-    { 'Cache-Control': 'public, max-age=20' },
+    { 'Cache-Control': 'public, max-age=60' },
   );
+  ctx.waitUntil(cache.put(cacheKey, res.clone()));
+  return res;
 }
 
 async function addPick(req: Request, env: Env) {
@@ -233,8 +246,9 @@ async function addPick(req: Request, env: Env) {
     .run();
   if (!res.meta.changes) throw new HttpError(409, "You've already added this one");
 
+  const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM picks WHERE kind = ? AND hidden = 0 AND ext_id = ?').bind('screen', item.id).first<{ n: number }>();
   return json(
-    { pick: { id: res.meta.last_row_id, ref: item.id, title: item.title, year: item.year, poster: item.poster, firstName, country: where } },
+    { star: { ref: item.id, title: item.title, year: item.year, poster: item.poster, count: n?.n ?? 1, firstName, country: where } },
     201,
   );
 }
