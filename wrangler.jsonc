@@ -14,7 +14,8 @@
     // exhibits a candle can be lit on: the slugs of src/content/projects in the portfolio
     "EXHIBITS": "moveit-india,crux,blue-blues,cfoco,panchayat-voting,agasti,regen-power,360-electronics,typyn",
     // new favourites per visitor per hour
-    "PICKS_PER_HOUR": "5"
+    "PICKS_PER_HOUR": "5",
+    "LOVES_PER_HOUR": "60"
   }
   // secrets (wrangler secret put …; locally in .dev.vars): TMDB_TOKEN, TURNSTILE_SECRET, IP_SALT, ADMIN_TOKEN
 }

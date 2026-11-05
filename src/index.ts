@@ -3,7 +3,7 @@
  *
  *   GET  /api/whoami                      → the visitor's country (from Cloudflare's IP geolocation)
  *   GET  /api/loves                       → { counts: { [slug]: n }, mine: slug[] }  (alias: /api/candles)
- *   POST /api/loves/:slug                 → love an exhibit (once per visitor)
+ *   POST /api/loves/:slug                 → love an exhibit (once per browser: X-Visitor header)
  *   GET  /api/search/screen?q=            → TMDB movies & series, trimmed for the picker
  *   GET  /api/picks?kind=screen           → the sky: one star per title (most picked + newest), edge-cached 60 s
  *   POST /api/picks                       → { kind: 'screen', id: 'movie:157336', firstName?, turnstile }
@@ -69,7 +69,8 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
 /* ---------------- candles ---------------- */
 
 async function getCandles(req: Request, env: Env) {
-  const voter = await voterId(req, env);
+  // no browser id, no "mine": an IP is shared by a whole home, office or carrier, so it never stands for one person
+  const voter = (await browserVoter(req, env)) ?? '-';
   const [counts, mine] = await env.DB.batch<{ slug: string; n?: number }>([
     env.DB.prepare('SELECT slug, COUNT(*) AS n FROM candles GROUP BY slug'),
     env.DB.prepare('SELECT slug FROM candles WHERE voter = ?').bind(voter),
@@ -82,9 +83,17 @@ async function getCandles(req: Request, env: Env) {
 
 async function lightCandle(req: Request, env: Env, slug: string) {
   if (!env.EXHIBITS.split(',').includes(slug)) throw new HttpError(404, 'Unknown exhibit');
-  const voter = await voterId(req, env);
-  await env.DB.prepare('INSERT OR IGNORE INTO candles (slug, voter, created_at) VALUES (?, ?, ?)')
-    .bind(slug, voter, Date.now())
+  const voter = await browserVoter(req, env);
+  if (!voter) throw new HttpError(400, 'Missing visitor id');
+  // the IP only rate-limits (generously: many people can share one): it never decides who has loved what
+  const ip = await voterId(req, env);
+  const perHour = Number(env.LOVES_PER_HOUR) || 60;
+  const recent = await env.DB.prepare('SELECT COUNT(*) AS n FROM candles WHERE ip = ? AND created_at > ?')
+    .bind(ip, Date.now() - 3600_000)
+    .first<{ n: number }>();
+  if ((recent?.n ?? 0) >= perHour) throw new HttpError(429, 'That is plenty for now. Try again in an hour.');
+  await env.DB.prepare('INSERT OR IGNORE INTO candles (slug, voter, created_at, ip) VALUES (?, ?, ?, ?)')
+    .bind(slug, voter, Date.now(), ip)
     .run();
   const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM candles WHERE slug = ?').bind(slug).first<{ n: number }>();
   return json({ slug, count: row?.n ?? 0, lit: true });
@@ -278,7 +287,7 @@ function corsHeaders(origin: string | null, env: Env): Record<string, string> | 
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Visitor',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -290,6 +299,18 @@ function country(req: Request): string | null {
   return c && /^[A-Z]{2}$/.test(c) && c !== 'XX' && c !== 'T1' ? c : null;
 }
 
+/**
+ * One browser: a random id the site keeps in localStorage and sends as X-Visitor, stored only as a salted hash.
+ * Null when absent or malformed.
+ */
+async function browserVoter(req: Request, env: Env) {
+  const id = req.headers.get('X-Visitor') ?? '';
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${env.IP_SALT}|v|${id.toLowerCase()}`));
+  return 'v' + [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 31);
+}
+
+/** A salted hash of the IP: for rate limits only. */
 async function voterId(req: Request, env: Env) {
   const ip = req.headers.get('CF-Connecting-IP') ?? '0.0.0.0';
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${env.IP_SALT}|${ip}`));
