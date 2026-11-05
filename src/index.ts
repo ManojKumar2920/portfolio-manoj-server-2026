@@ -2,8 +2,8 @@
  * portfolio-server: the small API behind the portfolio's shared 3D world.
  *
  *   GET  /api/whoami                      → the visitor's country (from Cloudflare's IP geolocation)
- *   GET  /api/candles                     → { counts: { [slug]: n }, mine: slug[] }
- *   POST /api/candles/:slug               → light a candle on an exhibit (once per visitor)
+ *   GET  /api/loves                       → { counts: { [slug]: n }, mine: slug[] }  (alias: /api/candles)
+ *   POST /api/loves/:slug                 → love an exhibit (once per visitor)
  *   GET  /api/search/screen?q=            → TMDB movies & series, trimmed for the picker
  *   GET  /api/picks?kind=screen           → the sky: one star per title (most picked + newest), edge-cached 60 s
  *   POST /api/picks                       → { kind: 'screen', id: 'movie:157336', firstName?, turnstile }
@@ -50,8 +50,9 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
 
   if (m === 'GET' && path === '/api/whoami') return json({ country: country(req) });
 
-  if (m === 'GET' && path === '/api/candles') return getCandles(req, env);
-  const candle = path.match(/^\/api\/candles\/([a-z0-9-]{1,48})$/);
+  // loves: a heart per exhibit, once per visitor (stored in the candles table; /api/candles kept as an alias)
+  if (m === 'GET' && (path === '/api/loves' || path === '/api/candles')) return getCandles(req, env);
+  const candle = path.match(/^\/api\/(?:loves|candles)\/([a-z0-9-]{1,48})$/);
   if (m === 'POST' && candle) return lightCandle(req, env, candle[1]);
 
   if (m === 'GET' && path === '/api/search/screen') return searchScreen(url, env, ctx);

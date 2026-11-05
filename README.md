@@ -1,6 +1,6 @@
 # portfolio-server
 
-Cloudflare Worker + D1 behind the portfolio's shared 3D world: candles on exhibits and visitors' favourite
+Cloudflare Worker + D1 behind the portfolio's shared 3D world: hearts on exhibits and visitors' favourite
 movies & series (TMDB). Songs (`kind = 'track'`) come next.
 
 ## Endpoints
@@ -8,8 +8,8 @@ movies & series (TMDB). Songs (`kind = 'track'`) come next.
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/whoami` | `{ country }` from Cloudflare's IP geolocation |
-| GET | `/api/candles` | `{ counts: { slug: n }, mine: [slug] }` |
-| POST | `/api/candles/:slug` | Light a candle (once per visitor; slugs listed in `EXHIBITS`) |
+| GET | `/api/loves` | `{ counts: { slug: n }, mine: [slug] }` (alias `/api/candles`) |
+| POST | `/api/loves/:slug` | Love an exhibit (once per visitor; slugs listed in `EXHIBITS`) |
 | GET | `/api/search/screen?q=` | TMDB movies & series, trimmed, edge-cached for an hour |
 | GET | `/api/picks?kind=screen` | `{ recent (150), top (20) }` visible picks |
 | POST | `/api/picks` | `{ kind: 'screen', id: 'movie:157336' \| 'tv:1396', firstName?, turnstile }` |
