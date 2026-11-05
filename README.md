@@ -31,16 +31,21 @@ npm run dev                      # http://localhost:8787
 
 ## Deploy
 
-```sh
-npx wrangler login
-npx wrangler d1 create portfolio          # paste database_id into wrangler.jsonc
-npm run db:migrate:remote
-npx wrangler secret put TMDB_TOKEN
-npx wrangler secret put TURNSTILE_SECRET
-npx wrangler secret put IP_SALT
-npx wrangler secret put ADMIN_TOKEN
+Pushes to `main` deploy automatically through Cloudflare Workers Builds (the repo is connected to the
+`portfolio-server` Worker in the dashboard, Settings → Builds):
 
-npm run deploy
+- Build command: `npm ci && npm run check`
+- Deploy command: `npx wrangler d1 migrations apply portfolio --remote && npx wrangler deploy`
+
+So a new migration in `migrations/` is applied before the code that needs it goes live. Build logs are in the
+dashboard. Secrets (`TMDB_TOKEN`, `TURNSTILE_SECRET`, `IP_SALT`, `ADMIN_TOKEN`) are set once on the Worker with
+`npx wrangler secret put <NAME>` and are never in the repo.
+
+Hide a pick:
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $(cat .admin-token)" \
+  https://portfolio-server.manojkumararumainathan.workers.dev/api/admin/picks/<id>
 ```
 
 TMDB's terms require the credit "This product uses the TMDB API but is not endorsed or certified by TMDB" and
