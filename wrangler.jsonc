@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "portfolio-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-05",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    // created with `wrangler d1 create portfolio` (APAC)
+    { "binding": "DB", "database_name": "portfolio", "database_id": "8907a83e-bbdd-49cb-80b6-cec8a0689a51", "migrations_dir": "migrations" }
+  ],
+  "vars": {
+    // sites allowed to call the API (comma-separated)
+    "ALLOWED_ORIGINS": "https://manoj-kumar.dev,https://www.manoj-kumar.dev,http://localhost:4321,http://localhost:4330",
+    // exhibits a candle can be lit on: the slugs of src/content/projects in the portfolio
+    "EXHIBITS": "moveit-india,crux,blue-blues,cfoco,panchayat-voting,agasti,regen-power,360-electronics,typyn",
+    // new favourites per visitor per hour
+    "PICKS_PER_HOUR": "5"
+  }
+  // secrets (wrangler secret put …; locally in .dev.vars): TMDB_TOKEN, TURNSTILE_SECRET, IP_SALT, ADMIN_TOKEN
+}

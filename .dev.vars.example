@@ -1,0 +1,9 @@
+# Copy to .dev.vars for `npm run dev`. Never commit .dev.vars.
+# TMDB "API Read Access Token" (v4): https://www.themoviedb.org/settings/api
+TMDB_TOKEN=
+# Turnstile test secret: always passes. Use the real one in production.
+TURNSTILE_SECRET=1x0000000000000000000000000000000AA
+# Any long random string: salts the IP hash.
+IP_SALT=change-me-to-a-long-random-string
+# Bearer token for the moderation endpoints.
+ADMIN_TOKEN=change-me-too
